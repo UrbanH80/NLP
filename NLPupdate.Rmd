@@ -1,0 +1,199 @@
+---
+title: "NLP Project Update"
+author: "Clemens"
+date: "8/17/2020"
+output: html_document
+---
+
+# Overview
+
+
+This effort will look building a program that predicts the next word a user will type.  It will primarily consist of four main efforts:
+- Clean, explore and structure the data in a useable format
+- Natural language processing to capture ngrams from the corpora
+- A prediction model for future words with a balance of accuracy and perfomrance
+- Build a shiny interface for end users
+
+The corpora used are from the SwiftKey dataset which was obtained from a web crawler looking for samples from newspapers, blogs and twitter.
+
+
+# Read in the data
+
+The dataset was downloaded from [this location](https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip) and read into R below.  
+
+```{r load libraries, warning=FALSE, message=FALSE}
+library(ngram)
+library(caret)
+library(stringr)
+library(dplyr)
+```
+
+
+```{r read data, warning=FALSE}
+### read in data
+path <- getwd()
+filepath <- paste(path,"/en_US.twitter.txt", sep = "")
+linetwitter <- readLines(filepath)
+
+path <- getwd()
+filepath <- paste(path,"/en_US.blogs.txt", sep = "")
+lineblogs <- readLines(filepath)
+
+path <- getwd()
+filepath <- paste(path,"/en_US.news.txt", sep = "")
+news.con <- file(filepath,'rb')
+linenews <- readLines(news.con) 
+close(news.con)
+```
+
+# Exploratory data analysis
+
+First we'll look at some basic information from the datasets such as size, max characters, average line length and size.  Here I am using these functions:
+- object.size()
+
+- max(nchar())
+
+- mean(nchar())
+
+- length()
+
+
+## Dataset details
+
+```{r , echo=FALSE}
+### Exploratory Data Analysis
+#check size
+size <- c(object.size(lineblogs),
+          object.size(linenews),
+          object.size(linetwitter))
+
+#check max line lengths
+maxc <- c(max(nchar(lineblogs)),
+        max(nchar(linenews)),
+        max(nchar(linetwitter)))
+
+#check avg line lengths
+meanc <- c(mean(nchar(lineblogs)),
+        mean(nchar(linenews)),
+        mean(nchar(linetwitter)))
+
+#check number of lines
+length <- c(length(lineblogs),
+          length(linenews),
+          length(linetwitter))
+
+trows <- c("blogs", "news", "twitter")
+
+table <- data.frame(trows, length, maxc, meanc, size/1000000000)
+colnames(table) <- c("", "no. lines", "max_char", "mean_char", "size_GB")
+table$mean_char <- round(table$mean_char, 0)
+table$size_GB <- round(table$size_GB, 2)
+print(table)
+
+```
+
+
+## Combine and clean
+Next well combine and clean the dataset.  I'm starting with a 10% sample size for the training set for initial speed of the model building.
+
+```{r combine and clean}
+set.seed(3000)
+sblogs <- sample(lineblogs, 0.1*length(lineblogs))
+snews <- sample(linenews, 0.1*length(linenews))
+stwit <- sample(linetwitter, 0.1*length(linetwitter))
+
+#combine to one set
+train <- c(sblogs,snews,stwit)
+linecount <- length(train)
+
+# using preprocess function from ngram package to
+        # make lowercase
+        # remove punctuation
+        # remove numbers
+        # remove multiple and trailing spaces
+processedtrain <- train    #initializing processedtrain (to get the function below to work)
+for(i in 1:linecount) {
+        processedtrain[i] <- preprocess(train[i], 
+                                        case = "lower", 
+                                        remove.punct = TRUE,
+                                        remove.numbers = TRUE, 
+                                        fix.spacing = TRUE)
+        }
+```
+
+## Extract ngrams
+
+Now that we have the training set well start creating tokens for each element of the processed data.  The end goal of this is create ngrams for the corpora.  We're interested in predicting the next work after one, two and three word phrases so well look at unigrams, bigrams, trigrams and fourgrams.
+
+```{r tokenize}
+### Start creating tokens for each element of the processed data.
+# basically this is, for each element, recording the 1,2 and 3 word combinations in each element
+# for example, for the unigram it's just recording each word in the strings
+tokenizer <- function(x){
+        tokens <- unlist(strsplit(x, " ")) # splitting on any space
+                                           # note this matches wordcount(processedtrain)        
+        tokens <- tokens[tokens != ""]     # removing empty tokens, if any
+}
+tokens <- tokenizer(processedtrain) # this will be the unigrams
+summary(tokens)
+
+# get 2 word, 3 word, and 4 word combinations
+tokens2 <- c(tokens[-1], ".")
+tokens3 <- c(tokens2[-1], ".")
+tokens4 <- c(tokens3[-1], ".")
+```
+
+Now we can paste the tokens together to get the full list of unigrams, bigrams, trigrams and quadgrams.
+
+We'll also sort them and plot the top 20 to see if what we did makes sense.
+
+```{r make ngrams and sort}
+unigrams <- tokens
+bigrams <- paste(tokens, tokens2)
+trigrams <- paste(tokens, tokens2, tokens3)
+quadgrams <- paste(tokens, tokens2, tokens3, tokens4)
+
+#sort n-grams on frequency
+unigrams <- table(unigrams)
+bigrams <- table(bigrams)
+trigrams <- table(trigrams)
+quadgrams <- table(quadgrams)
+unigrams <- sort(unigrams, decreasing = TRUE)   #238,105
+bigrams <- sort(bigrams, decreasing =TRUE)      #2,934,259
+trigrams <- sort(trigrams, decreasing = TRUE)   #6,993,593
+quadgrams <- sort(quadgrams, decreasing = TRUE) #9,157,241
+```
+
+### Unigrams
+```{r plot1, echo=FALSE}
+barchart(unigrams[1:20], col = "green")
+```
+
+### Bigrams
+```{r plot2, echo=FALSE}
+barchart(bigrams[1:20], col = "red")
+```
+
+### Trigrams
+```{r plot3, echo=FALSE}
+barchart(trigrams[1:20])
+```
+
+### Quadgrams
+```{r plot4, echo=FALSE}
+barchart(quadgrams[1:20], col = "blue")
+```
+
+# Next Steps
+
+The plots so far appear to be logical results of common ngrams.  The next steps will be to:
+
+- **Build a prediction model** for future words with a balance of accuracy and perfomrance.  Using the ngrams above I'll be able to match the most common unigram, bigram or trigram to predict the most common next word from the corpora.  I'll create a validation set from the corpora so the accuracy can be measured and balanced with overall code performance.
+
+
+- **Build a shiny interface for end users**.  I'm expecting this will be fairly straight forward after a working prediction model is built.  The goal will be to keep a simple interface that is intuitive for end users.
+
+
+
+
+
